@@ -100,6 +100,23 @@ entrypoint and command instead of replacing them.
 No `.env`, QNAP `config.json`, Plex token, Arr API key, Trakt secret, or MCP
 authentication token will be copied into the image.
 
+## Dependency audit baseline
+
+The inherited lockfile currently contains compatible updates for all reported
+high-severity advisories. Those updates will be applied before the image is
+published.
+
+One moderate advisory remains in `@hono/node-server` versions below 2.0.5.
+The current and latest `@modelcontextprotocol/sdk` 1.29.0 requires
+`@hono/node-server` 1.x, so npm offers only an incompatible forced SDK
+downgrade as an automatic resolution. The affected `serve-static` Windows
+path is not used by this Linux, stdio-based Plex MCP process.
+
+The fork will document this exception, reject high-severity advisories in CI,
+and remove the exception when MCP SDK supports the corrected Hono Node Server
+major version. It will not force an unsupported transitive major override or
+downgrade MCP SDK.
+
 ## GitHub Actions
 
 The Docker workflow will support:
