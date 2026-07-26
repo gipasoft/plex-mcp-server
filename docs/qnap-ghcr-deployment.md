@@ -10,10 +10,12 @@ devono essere presenti né `build:` nel Compose né comandi `docker compose buil
 
 ## File Compose e prerequisiti
 
-Usare [docker-compose.qnap.yml](../docker-compose.qnap.yml) come contenuto del
-file `docker-compose.yml` nella cartella reale dell'applicazione Container
-Station. Non creare una seconda applicazione: il file continua a gestire gli
-stessi servizi `paperless-mcp` e `plex-mcp` nella rete esterna `qnap-network`.
+Copiare il file [docker-compose.qnap.yml](../docker-compose.qnap.yml) del
+repository nella cartella reale dell'applicazione Container Station, mantenendo
+il nome `docker-compose.qnap.yml`. Durante la migrazione, quel file sostituirà
+il `docker-compose.yml` attivo. Non creare una seconda applicazione: il file
+continua a gestire gli stessi servizi `paperless-mcp` e `plex-mcp` nella rete
+esterna `qnap-network`.
 
 Prima di eseguire Compose, conservare nella stessa cartella reale i file già in
 uso `.env`, `config.json` e `bin/trilium-mcp`. Non inserire segreti nel file
@@ -94,11 +96,12 @@ docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
 ```
 
-Per restare sul fork ma bloccare il proxy a un'immagine già pubblicata, impostare
-nel servizio `plex-mcp` un tag SHA, quindi eseguire gli ultimi due comandi:
+Per restare sul fork ma bloccare il proxy a un'immagine già pubblicata,
+selezionare un tag SHA effettivamente pubblicato da GitHub Actions e impostarlo
+nel servizio `plex-mcp`, quindi eseguire gli ultimi due comandi:
 
 ```yaml
-image: ghcr.io/gipasoft/plex-mcp-server:sha-74e3183
+image: ghcr.io/gipasoft/plex-mcp-server:sha-<commit-sha-pubblicato>
 ```
 
 ## Rendere pubblica l'immagine GHCR
