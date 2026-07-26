@@ -1,3 +1,5 @@
+# Riferimento sanitizzato per confronto: non sovrascrive il Compose QNAP attivo.
+# Preservare sempre servizi, segreti, mount, porte, reti, label e impostazioni reali.
 services:
   paperless-mcp:
     image: ghcr.io/barryw/paperlessmcp:v0.3.2

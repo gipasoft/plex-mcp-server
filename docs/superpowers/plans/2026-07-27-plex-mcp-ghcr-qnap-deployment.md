@@ -25,7 +25,9 @@ comando Plex, che esegue il file incorporato nell'immagine.
 - Nessun segreto, `.env` o `config.json` reale entra nel repository o
   nell'immagine.
 - `latest` viene pubblicato soltanto da `main` dopo test e build riusciti.
-- Ogni pubblicazione include un tag immutabile `sha-<commit breve>`.
+- Ogni pubblicazione include un tag correlato `sha-<commit breve>`, registra il
+  digest manifest GHCR e usa `image@sha256:<digest>` come identità immutabile
+  per distribuzione e rollback. I tag OCI non sono considerati immutabili.
 - Paperless, Trilium, porta `9097:9090`, `qnap-network` e autenticazione proxy
   restano invariati.
 - Plex mutativo resta disabilitato salvo una futura scelta esplicita.
@@ -391,8 +393,30 @@ exports
 .env
 .env.*
 !.env.example
+.npmrc
+/config.json
+/config.json.*
+/config.*.json
 *.log
 *.tgz
+*.key
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+*.p7b
+*.p7c
+*.p8
+*.jks
+*.keystore
+*.csr
+*.der
+*.ppk
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
 .DS_Store
 Thumbs.db
 docs
@@ -400,7 +424,9 @@ scripts
 ```
 
 Lo script è escluso dal contesto perché viene eseguito dall'host, non copiato
-nell'immagine.
+nell'immagine. Aggiungere gli stessi pattern relativi a configurazione reale,
+`.npmrc`, chiavi e certificati a `.gitignore`, senza ignorare
+`docker-compose.qnap.yml` o altri riferimenti sanitizzati versionati.
 
 - [ ] **Passo 5: costruire l'immagine per la piattaforma QNAP**
 
@@ -480,7 +506,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 env:
   REGISTRY: ghcr.io
@@ -489,8 +514,10 @@ env:
 
 jobs:
   verify:
-    name: Test and build
+    name: Test, audit, and build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -504,30 +531,65 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit high-severity vulnerabilities
+        run: npm audit --audit-level=high
+
       - name: Test
         run: npm test
 
       - name: Build TypeScript
         run: npm run build
 
-  container:
-    name: Build and publish container
+  pull-request-image:
+    name: Build and smoke-test pull request image
+    if: github.event_name == 'pull_request'
     needs: verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and load candidate
+        uses: docker/build-push-action@v7
         with:
-          node-version: "24"
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: plex-mcp-server:pr
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test candidate
+        run: node scripts/smoke-test-image.mjs plex-mcp-server:pr
+
+  publish:
+    name: Build, smoke-test, and publish container
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||
+      startsWith(github.ref, 'refs/tags/v'))
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.published.outputs.digest }}
+      immutable_reference: ${{ steps.published.outputs.immutable_reference }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v4
 
       - name: Login to GHCR
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -545,23 +607,61 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      - name: Build and optionally publish
+      - name: Build and load candidate with publication tags
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+          load: true
+          push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          load: ${{ github.event_name == 'pull_request' }}
 
-      - name: Smoke test pull request image
-        if: github.event_name == 'pull_request'
+      - name: Select smoke-test image
+        id: candidate
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          docker tag "${REGISTRY}/${IMAGE_NAME}:sha-${GITHUB_SHA::7}" plex-mcp-server:pr
-          node scripts/smoke-test-image.mjs plex-mcp-server:pr
+          SMOKE_IMAGE="$(printf '%s\n' "$IMAGE_TAGS" | sed -n '1p')"
+          test -n "$SMOKE_IMAGE"
+          docker image inspect "$SMOKE_IMAGE" >/dev/null
+          echo "image=$SMOKE_IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test candidate
+        run: node scripts/smoke-test-image.mjs "${{ steps.candidate.outputs.image }}"
+
+      - name: Push exact tested local tags
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while IFS= read -r tag; do
+            test -n "$tag" || continue
+            docker image inspect "$tag" >/dev/null
+            docker push "$tag"
+          done <<< "$IMAGE_TAGS"
+
+      - name: Record published digest
+        id: published
+        env:
+          SMOKE_IMAGE: ${{ steps.candidate.outputs.image }}
+        run: |
+          PUBLISHED_DIGEST="$(
+            docker buildx imagetools inspect "$SMOKE_IMAGE" |
+              sed -n 's/^Digest:[[:space:]]*//p' |
+              head -n 1
+          )"
+          printf '%s\n' "$PUBLISHED_DIGEST" |
+            grep -Eq '^sha256:[0-9a-f]{64}$'
+          IMMUTABLE_REFERENCE="${REGISTRY}/${IMAGE_NAME}@${PUBLISHED_DIGEST}"
+          echo "digest=$PUBLISHED_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "immutable_reference=$IMMUTABLE_REFERENCE" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Immagine GHCR pubblicata"
+            echo "- Digest manifest: \`${PUBLISHED_DIGEST}\`"
+            echo "- Riferimento immutabile: \`${IMMUTABLE_REFERENCE}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 ```
 
 - [ ] **Passo 2: verificare localmente immagine e smoke test**
@@ -573,9 +673,9 @@ docker build --platform linux/amd64 --tag plex-mcp-server:test .
 node scripts/smoke-test-image.mjs plex-mcp-server:test
 ```
 
-Poi controllare che `metadata-action` usi il formato predefinito di sette
-caratteri per `type=sha`, fissato esplicitamente da
-`DOCKER_METADATA_SHORT_SHA_LENGTH: 7`.
+Poi controllare che `metadata-action` usi sette caratteri per `type=sha`,
+fissati da `DOCKER_METADATA_SHORT_SHA_LENGTH: 7`, e che `latest` sia abilitato
+esclusivamente sul branch predefinito.
 
 - [ ] **Passo 3: controllare sintassi e permessi**
 
@@ -588,9 +688,17 @@ git status --short
 
 Controllare manualmente che:
 
-- `packages: write` sia presente;
-- il login sia escluso dalle PR;
-- `push` sia vero soltanto su `main` o tag `v*.*.*`;
+- `npm audit --audit-level=high` preceda ogni job di pubblicazione tramite
+  `needs: verify`;
+- i job PR abbiano solo `contents: read`;
+- `packages: write` sia presente esclusivamente nel job `publish`;
+- il job `publish` sia eseguito soltanto sul branch predefinito o su tag
+  `v*.*.*`;
+- la build pubblicabile usi `load: true` e `push: false`;
+- lo smoke test preceda il ciclo `docker push` degli stessi tag locali;
+- non esista una seconda build dopo lo smoke test;
+- digest e riferimento `image@sha256:<digest>` siano output e riepilogo della
+  run;
 - la piattaforma sia `linux/amd64`;
 - nessun secret personalizzato sia richiesto.
 
@@ -603,7 +711,7 @@ git commit -m "ci: publish Plex MCP proxy image"
 
 ---
 
-### Task 4: Documentare e validare la configurazione QNAP
+### Task 4: Documentare e validare il riferimento QNAP sanitizzato
 
 **File:**
 
@@ -614,9 +722,10 @@ git commit -m "ci: publish Plex MCP proxy image"
 
 - Consuma: immagine GHCR, `.env`, `config.json`, `bin/trilium-mcp`,
   `qnap-network`.
-- Produce: applicazione QNAP aggiornabile con due comandi Compose.
+- Produce: riferimento di confronto e procedura di modifica minima
+  dell'applicazione QNAP attiva.
 
-- [ ] **Passo 1: creare il Compose sanitizzato**
+- [ ] **Passo 1: creare il Compose sanitizzato solo per confronto**
 
 Creare `docker-compose.qnap.yml`:
 
@@ -671,6 +780,14 @@ networks:
     external: true
 ```
 
+Inserire in testa un commento esplicito: questo file è un riferimento
+sanitizzato per confronto e non deve mai sovrascrivere il Compose QNAP attivo.
+La guida deve prescrivere modifiche minime direttamente al
+`docker-compose.yml` reale, preservando Paperless, Trilium, autenticazione,
+mount, porte, reti, label, restart policy e impostazioni Container Station.
+L'healthcheck è facoltativo: aggiungerlo soltanto se desiderato o richiesto,
+oppure conservare quello reale già presente.
+
 - [ ] **Passo 2: scrivere la modifica esatta di `config.json`**
 
 In `docs/qnap-ghcr-deployment.md` indicare di sostituire esclusivamente:
@@ -695,7 +812,7 @@ con:
 Specificare esplicitamente che blocchi `env`, `options`, Paperless, Trilium e
 `mcpProxy` non devono cambiare.
 
-- [ ] **Passo 3: documentare prima migrazione e backup**
+- [ ] **Passo 3: documentare prima migrazione e backup senza sostituzione**
 
 Inserire:
 
@@ -709,7 +826,10 @@ docker compose ps
 docker compose logs --tail=100 plex-mcp
 ```
 
-Spiegare che il primo `up` ricrea soltanto il proxy e non Paperless.
+Spiegare che il primo `up` ricrea soltanto il proxy e non Paperless. Vietare
+esplicitamente `cp docker-compose.qnap.yml docker-compose.yml`. Precisare che
+`docker compose config` valida e normalizza l'healthcheck dichiarato ma non lo
+esegue; è Docker a eseguirlo dopo `docker compose up`.
 
 - [ ] **Passo 4: documentare aggiornamenti ordinari**
 
@@ -734,11 +854,15 @@ docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
 ```
 
-Documentare anche il rollback a un'immagine del fork:
+Documentare anche il rollback garantito a un'immagine del fork usando il
+digest manifest reale registrato nel riepilogo GitHub Actions:
 
 ```yaml
-image: ghcr.io/gipasoft/plex-mcp-server:sha-74e3183
+image: ghcr.io/gipasoft/plex-mcp-server@sha256:<digest-manifest-registrato>
 ```
+
+Spiegare che `sha-<commit breve>` è un tag correlato utile, ma può essere
+sovrascritto; soltanto il digest identifica immutabilmente il manifest.
 
 - [ ] **Passo 6: documentare la visibilità pubblica GHCR**
 
@@ -756,16 +880,17 @@ registry possono essere scaricate senza autenticazione.
 
 - [ ] **Passo 7: verificare il Compose nell'ambiente QNAP**
 
-Dalla cartella reale dell'applicazione, dopo aver conservato `.env`,
-`config.json` e `bin/trilium-mcp`, eseguire:
+Dalla cartella reale dell'applicazione, dopo aver preservato tutti i file e
+aver applicato soltanto le modifiche approvate al Compose attivo, eseguire:
 
 ```bash
-docker compose -f docker-compose.qnap.yml config
+docker compose config
 ```
 
 Risultato atteso: exit code `0`, immagine
 `ghcr.io/gipasoft/plex-mcp-server:latest`, rete esterna `qnap-network` e
-healthcheck sulla porta `9090`.
+ogni impostazione reale preservata. Se è stato aggiunto l'healthcheck,
+controllarne la dichiarazione normalizzata; il comando non lo esegue.
 
 - [ ] **Passo 8: creare il commit QNAP**
 
@@ -790,22 +915,47 @@ git commit -m "docs: add QNAP GHCR deployment"
 - [ ] **Passo 1: eseguire la verifica completa fresca**
 
 ```bash
+npm audit --audit-level=high
 npm test
 npm run build
 docker build --platform linux/amd64 --tag plex-mcp-server:test .
 node scripts/smoke-test-image.mjs plex-mcp-server:test
+QNAP_CHECK_DIR="$(mktemp -d)"
+trap 'rm -rf "$QNAP_CHECK_DIR"' EXIT
+cp docker-compose.qnap.yml "$QNAP_CHECK_DIR/docker-compose.yml"
+printf 'PLEX_URL=http://127.0.0.1:32400\nPLEX_TOKEN=validation-only\n' \
+  > "$QNAP_CHECK_DIR/.env"
+printf '{}\n' > "$QNAP_CHECK_DIR/config.json"
+mkdir -p "$QNAP_CHECK_DIR/bin"
+touch "$QNAP_CHECK_DIR/bin/trilium-mcp"
+PAPERLESS_BASE_URL=http://127.0.0.1:8000 \
+PAPERLESS_API_TOKEN=validation-only \
+docker compose \
+  --project-directory "$QNAP_CHECK_DIR" \
+  -f "$QNAP_CHECK_DIR/docker-compose.yml" \
+  config
 git diff --check origin/main...HEAD
 git status --short
 ```
 
 Risultato atteso:
 
+- audit alto riuscito;
 - 187 test superati;
 - build TypeScript riuscita;
 - build Docker riuscita;
 - smoke test riuscito;
+- Compose sanitizzato valido come riferimento;
 - nessun errore di whitespace;
 - working tree pulito.
+
+Eseguire inoltre asserzioni statiche focalizzate che falliscano prima della
+correzione e riescano dopo, verificando almeno: audit nel gate, permessi
+read-only sulle PR, `packages: write` solo su `publish`, build caricata e
+smoke-testata prima di ogni `docker push`, assenza di rebuild post-smoke,
+digest nel riepilogo/output, `latest` soltanto dal branch predefinito,
+procedura QNAP senza sovrascrittura, tre route MCP, rollback a digest e pattern
+di esclusione dei segreti.
 
 - [ ] **Passo 2: richiedere una code review indipendente**
 
@@ -859,7 +1009,9 @@ senza la scelta esplicita dell'utente.
 **Interfacce:**
 
 - Consuma: Pull Request approvata e workflow `Docker`.
-- Produce: `latest` e `sha-*` pubblici su GHCR.
+- Produce: `latest` dal branch predefinito, tag `sha-*` correlati al commit,
+  digest manifest registrato e riferimento immutabile
+  `image@sha256:<digest>` pubblici su GHCR.
 
 - [ ] **Passo 1: unire la PR soltanto dopo autorizzazione**
 
@@ -894,7 +1046,13 @@ PLEX_RUN_ID="$(gh run list \
 gh run watch "$PLEX_RUN_ID" --repo gipasoft/plex-mcp-server
 ```
 
-- [ ] **Passo 3: verificare package e tag**
+La run deve mostrare, prima di qualsiasi push: `npm audit
+--audit-level=high`, test, build TypeScript, build Docker caricata e smoke test.
+Il riepilogo deve contenere il digest manifest e il riferimento immutabile. Lo
+stesso gate vale per push `main`, tag versione e pubblicazioni manuali da
+`main`.
+
+- [ ] **Passo 3: verificare package, tag e digest**
 
 ```bash
 gh api \
@@ -909,7 +1067,25 @@ gh api \
 ```
 
 Risultato atteso: package `plex-mcp-server` con `latest` e almeno un tag
-`sha-*`.
+`sha-*`. `latest` deve essere associato soltanto a una pubblicazione del branch
+predefinito; i tag versione non lo generano.
+
+Aprire il riepilogo della run e registrare il valore reale:
+
+```text
+ghcr.io/gipasoft/plex-mcp-server@sha256:<64-caratteri-esadecimali>
+```
+
+Verificare che il digest sia interrogabile e salvare l'output con la
+documentazione operativa del QNAP:
+
+```bash
+docker buildx imagetools inspect \
+  ghcr.io/gipasoft/plex-mcp-server@sha256:<digest-reale-registrato>
+```
+
+Il placeholder deve essere sostituito con il digest reale della run: non usare
+il tag `sha-*` come garanzia di immutabilità.
 
 - [ ] **Passo 4: rendere il package pubblico**
 
@@ -934,6 +1110,8 @@ docker pull ghcr.io/gipasoft/plex-mcp-server:latest
 ```
 
 Risultato atteso: download riuscito senza `docker login ghcr.io`.
+Confrontare il digest mostrato dal pull con quello registrato nel riepilogo
+della run prima della migrazione.
 
 ---
 
@@ -974,7 +1152,9 @@ Nel Compose impostare:
 image: ghcr.io/gipasoft/plex-mcp-server:latest
 ```
 
-e aggiungere l'healthcheck dell'Attività 4.
+Modificare soltanto il campo `image` del servizio proxy. Aggiungere
+l'healthcheck dell'Attività 4 soltanto se esplicitamente desiderato o richiesto;
+se il Compose attivo ne contiene già uno funzionante, conservarlo.
 
 In `config.json` impostare:
 
@@ -985,7 +1165,9 @@ In `config.json` impostare:
 ]
 ```
 
-Non modificare token, URL, Paperless o Trilium.
+Non copiare `docker-compose.qnap.yml` sopra il Compose attivo. Non modificare
+token, URL, servizi Paperless o Trilium, autenticazione, mount, porte, reti,
+label, restart policy o impostazioni Container Station.
 
 - [ ] **Passo 3: validare senza ricreare container**
 
@@ -994,6 +1176,9 @@ docker compose config
 ```
 
 Risultato atteso: exit code `0`.
+
+Il comando valida la dichiarazione dell'eventuale healthcheck, ma non lo
+esegue e non ricrea container.
 
 - [ ] **Passo 4: scaricare l'immagine e ricreare solo il proxy**
 
@@ -1006,15 +1191,50 @@ docker compose up -d --no-deps plex-mcp
 
 ```bash
 docker compose ps
-docker compose logs --tail=100 plex-mcp
+docker compose logs --since=10m --tail=200 plex-mcp
 ```
 
-Risultato atteso: `plex-mcp` rimane `Up` e diventa `healthy`; i log non
-contengono errori di avvio, configurazione o comando Plex.
+Risultato atteso: `plex-mcp` rimane `Up` e, se l'healthcheck è dichiarato,
+diventa `healthy`; i log non contengono errori di avvio, configurazione,
+comando Plex o connessione ai downstream.
 
 - [ ] **Passo 6: verificare funzionalmente i tre endpoint**
 
-Da Plex AI Client eseguire una richiesta per ogni sorgente:
+Eseguire senza modifiche il blocco operativo
+`docker compose exec -T ... node --input-type=module` documentato in
+`docs/qnap-ghcr-deployment.md`. Il blocco usa il client MCP TypeScript già
+presente nell'immagine, riceve l'eventuale token da una lettura silenziosa,
+inizializza e chiama `listTools()` su:
+
+```text
+http://127.0.0.1:9090/plex/mcp
+http://127.0.0.1:9090/paperless/mcp
+http://127.0.0.1:9090/trilium/mcp
+```
+
+Risultato atteso: le tre route completano un handshake MCP reale ed espongono
+almeno un tool. Un semplice controllo TCP o un HTTP status non sostituisce
+questa verifica.
+
+- [ ] **Passo 7: verificare payload Plex reale e Plex AI Client**
+
+Lo stesso client MCP deve chiamare realmente `get_on_deck`, trovare un episodio
+e controllare campi non null:
+
+```json
+{
+  "seriesTitle": "valore reale",
+  "seasonNumber": 3,
+  "episodeNumber": 2
+}
+```
+
+I valori effettivi possono essere diversi e devono corrispondere ai metadati
+dell'episodio. Se On Deck non contiene episodi, riprendere un episodio e
+ripetere: l'assenza di episodi è una precondizione inconclusiva, non un esito
+positivo.
+
+Da Plex AI Client eseguire poi una richiesta reale per ogni sorgente:
 
 ```text
 Plex: Cosa c'è in continua visione? Mostra serie, stagione ed episodio.
@@ -1022,38 +1242,25 @@ Paperless: Cerca un documento recente.
 Trilium: Cerca una nota esistente.
 ```
 
-Risultato atteso:
-
 - Plex restituisce episodi con serie, stagione e numero episodio;
-- Paperless trova o interroga documenti senza errore di connessione;
-- Trilium trova o interroga note senza errore di connessione.
-
-- [ ] **Passo 7: verificare il payload Plex reale**
-
-Chiamare `get_on_deck` tramite il client MCP già configurato e controllare che
-un episodio contenga:
-
-```json
-{
-  "seriesTitle": "Il Trono di Spade",
-  "seasonNumber": 3,
-  "episodeNumber": 2
-}
-```
-
-I valori effettivi possono essere diversi; devono essere presenti i tre nomi
-campo e devono corrispondere ai metadati dell'episodio restituito.
+- Paperless restituisce un risultato reale di ricerca;
+- Trilium restituisce un risultato reale di ricerca.
 
 - [ ] **Passo 8: eseguire o documentare il rollback**
 
-Se una verifica fallisce:
+Ripetere `docker compose ps` e i log dopo le chiamate. Eseguire il rollback se
+il proxy si arresta o non diventa healthy quando configurato, i log mostrano
+errori, una delle tre route non completa handshake/lista tool, un episodio
+reale non contiene i tre campi o Plex AI Client perde una sorgente:
 
 ```bash
 cp docker-compose.yml.pre-plex-fork docker-compose.yml
 cp config.json.pre-plex-fork config.json
+docker compose config
 docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
 docker compose ps
+docker compose logs --since=10m --tail=200 plex-mcp
 ```
 
 Se tutte le verifiche riescono, conservare i backup e usare in futuro:
@@ -1062,3 +1269,8 @@ Se tutte le verifiche riescono, conservare i backup e usare in futuro:
 docker compose pull
 docker compose up -d
 ```
+
+Per un rollback garantito a una build del fork, impostare nel Compose attivo il
+riferimento `ghcr.io/gipasoft/plex-mcp-server@sha256:<digest-reale>` registrato
+nella run, validare con `docker compose config` e ricreare soltanto
+`plex-mcp`. Non considerare immutabile il tag `sha-*`.

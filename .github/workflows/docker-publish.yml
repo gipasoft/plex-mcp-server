@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 env:
   REGISTRY: ghcr.io
@@ -22,8 +21,10 @@ env:
 
 jobs:
   verify:
-    name: Test and build
+    name: Test, audit, and build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -37,30 +38,65 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit high-severity vulnerabilities
+        run: npm audit --audit-level=high
+
       - name: Test
         run: npm test
 
       - name: Build TypeScript
         run: npm run build
 
-  container:
-    name: Build and publish container
+  pull-request-image:
+    name: Build and smoke-test pull request image
+    if: github.event_name == 'pull_request'
     needs: verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and load candidate
+        uses: docker/build-push-action@v7
         with:
-          node-version: "24"
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: plex-mcp-server:pr
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test candidate
+        run: node scripts/smoke-test-image.mjs plex-mcp-server:pr
+
+  publish:
+    name: Build, smoke-test, and publish container
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||
+      startsWith(github.ref, 'refs/tags/v'))
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.published.outputs.digest }}
+      immutable_reference: ${{ steps.published.outputs.immutable_reference }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v4
 
       - name: Login to GHCR
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -78,20 +114,61 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      - name: Build and optionally publish
+      - name: Build and load candidate with publication tags
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+          load: true
+          push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          load: ${{ github.event_name == 'pull_request' }}
 
-      - name: Smoke test pull request image
-        if: github.event_name == 'pull_request'
+      - name: Select smoke-test image
+        id: candidate
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          docker tag "${REGISTRY}/${IMAGE_NAME}:sha-${GITHUB_SHA::7}" plex-mcp-server:pr
-          node scripts/smoke-test-image.mjs plex-mcp-server:pr
+          SMOKE_IMAGE="$(printf '%s\n' "$IMAGE_TAGS" | sed -n '1p')"
+          test -n "$SMOKE_IMAGE"
+          docker image inspect "$SMOKE_IMAGE" >/dev/null
+          echo "image=$SMOKE_IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test candidate
+        run: node scripts/smoke-test-image.mjs "${{ steps.candidate.outputs.image }}"
+
+      - name: Push exact tested local tags
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while IFS= read -r tag; do
+            test -n "$tag" || continue
+            docker image inspect "$tag" >/dev/null
+            docker push "$tag"
+          done <<< "$IMAGE_TAGS"
+
+      - name: Record published digest
+        id: published
+        env:
+          SMOKE_IMAGE: ${{ steps.candidate.outputs.image }}
+        run: |
+          PUBLISHED_DIGEST="$(
+            docker buildx imagetools inspect "$SMOKE_IMAGE" |
+              sed -n 's/^Digest:[[:space:]]*//p' |
+              head -n 1
+          )"
+          printf '%s\n' "$PUBLISHED_DIGEST" |
+            grep -Eq '^sha256:[0-9a-f]{64}$'
+          IMMUTABLE_REFERENCE="${REGISTRY}/${IMAGE_NAME}@${PUBLISHED_DIGEST}"
+          echo "digest=$PUBLISHED_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "immutable_reference=$IMMUTABLE_REFERENCE" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Immagine GHCR pubblicata"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Tag correlato: \`sha-${GITHUB_SHA::7}\`"
+            echo "- Digest manifest: \`${PUBLISHED_DIGEST}\`"
+            echo "- Riferimento immutabile: \`${IMMUTABLE_REFERENCE}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
