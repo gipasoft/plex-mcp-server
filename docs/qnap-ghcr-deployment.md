@@ -10,12 +10,15 @@ devono essere presenti né `build:` nel Compose né comandi `docker compose buil
 
 ## File Compose e prerequisiti
 
-Copiare il file [docker-compose.qnap.yml](../docker-compose.qnap.yml) del
-repository nella cartella reale dell'applicazione Container Station, mantenendo
-il nome `docker-compose.qnap.yml`. Durante la migrazione, quel file sostituirà
-il `docker-compose.yml` attivo. Non creare una seconda applicazione: il file
-continua a gestire gli stessi servizi `paperless-mcp` e `plex-mcp` nella rete
-esterna `qnap-network`.
+Il file [docker-compose.qnap.yml](../docker-compose.qnap.yml) nel repository è
+un riferimento da copiare sul QNAP. Nella cartella reale dell'applicazione
+Container Station, i comandi `docker compose` senza `-f` usano il file attivo
+`docker-compose.yml`: dopo il backup, copiarvi il file di riferimento con
+`cp docker-compose.qnap.yml docker-compose.yml`. È possibile conservare
+`docker-compose.qnap.yml` come sorgente locale, ma non deve essere il file
+operativo né richiede comandi `docker compose -f`. Non creare una seconda
+applicazione: il file attivo continua a gestire gli stessi servizi
+`paperless-mcp` e `plex-mcp` nella rete esterna `qnap-network`.
 
 Prima di eseguire Compose, conservare nella stessa cartella reale i file già in
 uso `.env`, `config.json` e `bin/trilium-mcp`. Non inserire segreti nel file
@@ -53,6 +56,7 @@ la modifica limitata a `config.json`. Quindi eseguire:
 ```bash
 cp docker-compose.yml docker-compose.yml.pre-plex-fork
 cp config.json config.json.pre-plex-fork
+cp docker-compose.qnap.yml docker-compose.yml
 docker compose config
 docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
@@ -60,10 +64,8 @@ docker compose ps
 docker compose logs --tail=100 plex-mcp
 ```
 
-Subito dopo i primi due comandi del blocco, copiare il Compose sanitizzato sul
-file attivo con `cp docker-compose.qnap.yml docker-compose.yml`, applicare la
-sola modifica Plex a `config.json` descritta sopra, quindi proseguire dalla riga
-`docker compose config`.
+Applicare la sola modifica Plex a `config.json` descritta sopra prima di
+proseguire dalla riga `docker compose config`.
 
 Il primo `docker compose up -d --no-deps plex-mcp` ricrea soltanto il proxy
 `plex-mcp`: non ricrea Paperless e non avvia una seconda applicazione.
