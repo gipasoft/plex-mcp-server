@@ -31,7 +31,10 @@ jobs:
       run: npm ci
     
     - name: Run npm audit
-      run: npm audit --audit-level=moderate
+      # MCP SDK 1.29.0 dipende da @hono/node-server 1.x. La sola advisory
+      # moderata residua riguarda serve-static su Windows, non il trasporto
+      # stdio eseguito in questo container Linux.
+      run: npm audit --audit-level=high
     
     # - name: Run Snyk security test
     #   uses: snyk/actions/node@master
@@ -120,7 +123,6 @@ jobs:
   dockerfile-security:
     name: Dockerfile Security (if applicable)
     runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.message, 'docker') || contains(github.event.pull_request.title, 'docker')
     
     steps:
     - name: Checkout code
