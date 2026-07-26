@@ -55,7 +55,7 @@ comando Plex, che esegue il file incorporato nell'immagine.
 
 ---
 
-### Attività 1: Stabilizzare la baseline di sicurezza delle dipendenze
+### Task 1: Stabilizzare la baseline di sicurezza delle dipendenze
 
 **File:**
 
@@ -180,7 +180,7 @@ git commit -m "chore: update dependency security baseline"
 
 ---
 
-### Attività 2: Creare e verificare l'immagine proxy con Plex MCP incorporato
+### Task 2: Creare e verificare l'immagine proxy con Plex MCP incorporato
 
 **File:**
 
@@ -448,7 +448,7 @@ git commit -m "feat: package Plex MCP with mcp-proxy"
 
 ---
 
-### Attività 3: Aggiungere la verifica e la pubblicazione GitHub Actions
+### Task 3: Aggiungere la verifica e la pubblicazione GitHub Actions
 
 **File:**
 
@@ -603,7 +603,7 @@ git commit -m "ci: publish Plex MCP proxy image"
 
 ---
 
-### Attività 4: Documentare e validare la configurazione QNAP
+### Task 4: Documentare e validare la configurazione QNAP
 
 **File:**
 
@@ -776,7 +776,7 @@ git commit -m "docs: add QNAP GHCR deployment"
 
 ---
 
-### Attività 5: Verificare l'intero branch e aprire la Pull Request del fork
+### Task 5: Verificare l'intero branch e aprire la Pull Request del fork
 
 **File:**
 
@@ -850,7 +850,7 @@ senza la scelta esplicita dell'utente.
 
 ---
 
-### Attività 6: Pubblicare e rendere pubblica l'immagine GHCR
+### Task 6: Pubblicare e rendere pubblica l'immagine GHCR
 
 **File:**
 
@@ -937,7 +937,7 @@ Risultato atteso: download riuscito senza `docker login ghcr.io`.
 
 ---
 
-### Attività 7: Migrare il proxy QNAP e verificare i tre MCP
+### Task 7: Migrare il proxy QNAP e verificare i tre MCP
 
 **File QNAP:**
 
