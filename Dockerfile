@@ -1,10 +1,11 @@
 FROM golang:1.23-bookworm AS trilium-build
 
-RUN git init /src/trilium-mcp \
- && git -C /src/trilium-mcp remote add origin https://github.com/gipasoft/trilium-mcp.git \
- && git -C /src/trilium-mcp fetch --depth 1 origin 9777d36107baa18cc7024b07936c03b7cc793c16 \
- && git -C /src/trilium-mcp checkout --detach FETCH_HEAD \
- && cd /src/trilium-mcp \
+WORKDIR /src/trilium-mcp
+
+RUN git init . \
+ && git remote add origin https://github.com/gipasoft/trilium-mcp.git \
+ && git fetch --depth 1 origin 9777d36107baa18cc7024b07936c03b7cc793c16 \
+ && git checkout --detach FETCH_HEAD \
  && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
       go build -trimpath -ldflags="-s -w" -o /out/trilium-mcp .
 
