@@ -298,6 +298,57 @@ describe("PlexTools", () => {
       expect(result.watchHistory[1]).not.toHaveProperty("seasonNumber");
       expect(result.watchHistory[1]).not.toHaveProperty("episodeNumber");
     });
+
+    it("includes episode hierarchy metadata in the library fallback", async () => {
+      (client.makeRequest as ReturnType<typeof vi.fn>).mockImplementation(
+        async (endpoint: string) => {
+          if (endpoint === "/status/sessions/history/all") {
+            throw new Error("session history unavailable");
+          }
+          if (endpoint === "/library/sections") {
+            return {
+              MediaContainer: {
+                Directory: [{ key: "7", title: "Serie TV", type: "show" }],
+              },
+            };
+          }
+          if (endpoint === "/library/sections/7/all") {
+            return {
+              MediaContainer: {
+                Metadata: [
+                  {
+                    ratingKey: "141844",
+                    title: "Episodio #1.8",
+                    type: "episode",
+                    grandparentTitle: "House of Guinness",
+                    parentIndex: 1,
+                    index: 8,
+                    lastViewedAt: 1785185004,
+                    viewCount: 1,
+                    duration: 3172949,
+                  },
+                ],
+              },
+            };
+          }
+          throw new Error(`Unexpected endpoint: ${endpoint}`);
+        },
+      );
+
+      const result = parseResponse(
+        await tools.getWatchHistory(10, undefined, "episode"),
+      );
+
+      expect(result.note).toBe(
+        "Generated from library metadata (fallback method)",
+      );
+      expect(result.watchHistory[0]).toMatchObject({
+        ratingKey: "141844",
+        seriesTitle: "House of Guinness",
+        seasonNumber: 1,
+        episodeNumber: 8,
+      });
+    });
   });
 
   /**
