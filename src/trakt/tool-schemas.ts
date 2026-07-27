@@ -6,23 +6,27 @@
 export const TRAKT_TOOL_SCHEMAS = [
   {
     name: "trakt_authenticate",
-    description: "Start Trakt.tv OAuth authentication process",
+    description:
+      "Start Trakt.tv authentication. Returns a user code to enter at the given verification URL.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        state: { type: "string", description: "Optional state parameter for OAuth flow" },
+        state: { type: "string", description: "Unused; kept for backward compatibility" },
       },
     },
   },
   {
     name: "trakt_complete_auth",
-    description: "Complete Trakt.tv authentication with authorization code",
+    description:
+      "Finish Trakt.tv authentication after the user code has been approved. Takes no arguments.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        code: { type: "string", description: "Authorization code from Trakt OAuth callback" },
+        code: {
+          type: "string",
+          description: "Legacy authorization code; only used when no device flow is pending",
+        },
       },
-      required: ["code"],
     },
   },
   {

@@ -19,6 +19,8 @@ import {
   TraktUserStats,
   TraktProgress,
   TraktAPIError,
+  TraktDeviceCode,
+  TraktDevicePollResult,
 } from './types.js';
 import {
   TRAKT_OAUTH_URL,
@@ -26,6 +28,8 @@ import {
   TRAKT_INITIAL_RATE_LIMIT_DELAY,
   TRAKT_DEFAULT_RETRY_AFTER,
   TRAKT_RATE_LIMIT_BACKOFF_MULTIPLIER,
+  TRAKT_DEVICE_CODE_PATH,
+  TRAKT_DEVICE_TOKEN_PATH,
 } from './constants.js';
 import { sleep } from '../shared/utils.js';
 
@@ -133,6 +137,69 @@ export class TraktClient {
     });
 
     return `${TRAKT_OAUTH_URL}?${params.toString()}`;
+  }
+
+  /**
+   * Start the device authorization flow.
+   * Returns the user-facing code and the page where it must be entered.
+   */
+  async requestDeviceCode(): Promise<TraktDeviceCode> {
+    try {
+      const response = await axios.post<TraktDeviceCode>(
+        `${this.config.baseUrl}${TRAKT_DEVICE_CODE_PATH}`,
+        { client_id: this.config.clientId },
+        { timeout: TRAKT_API_TIMEOUT, headers: { 'Content-Type': 'application/json' } }
+      );
+      return response.data;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new Error(`Device code request failed: ${msg}`);
+    }
+  }
+
+  /**
+   * Poll once for the tokens belonging to a device code.
+   *
+   * Deliberately bypasses the shared axios instance: its response interceptor
+   * turns every non-2xx into a throw, but here the non-2xx codes *are* the
+   * protocol (400 = still waiting, 410 = expired, ...).
+   */
+  async pollDeviceToken(deviceCode: string): Promise<TraktDevicePollResult> {
+    const response = await axios.post<TraktTokens>(
+      `${this.config.baseUrl}${TRAKT_DEVICE_TOKEN_PATH}`,
+      {
+        code: deviceCode,
+        client_id: this.config.clientId,
+        client_secret: this.config.clientSecret,
+      },
+      {
+        timeout: TRAKT_API_TIMEOUT,
+        headers: { 'Content-Type': 'application/json' },
+        validateStatus: () => true,
+      }
+    );
+
+    switch (response.status) {
+      case 200: {
+        const tokens = response.data;
+        tokens.created_at = Math.floor(Date.now() / 1000);
+        this.config.accessToken = tokens.access_token;
+        this.config.refreshToken = tokens.refresh_token;
+        return { status: 'authorized', tokens };
+      }
+      case 400:
+      case 429:
+        // 400 = authorization_pending, 429 = polling too fast. Both mean "wait".
+        return { status: 'pending' };
+      case 409:
+        return { status: 'used' };
+      case 410:
+        return { status: 'expired' };
+      case 418:
+        return { status: 'denied' };
+      default:
+        throw new Error(`Device token poll failed with status ${response.status}`);
+    }
   }
 
   /**

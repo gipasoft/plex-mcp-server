@@ -9,17 +9,32 @@ import { PlexToTraktMapper } from './mapper.js';
 import {
   TraktConfig,
   SyncOptions,
-  MCPStatsResponse
+  MCPStatsResponse,
+  TraktTokens
 } from './types.js';
-import { DEFAULT_TRAKT_API_URL, DEFAULT_BATCH_SIZE, ACHIEVEMENT_THRESHOLDS, TRAKT_PREVIEW_LIMIT } from './constants.js';
+import {
+  DEFAULT_TRAKT_API_URL,
+  DEFAULT_BATCH_SIZE,
+  ACHIEVEMENT_THRESHOLDS,
+  TRAKT_PREVIEW_LIMIT,
+  TRAKT_DEVICE_DEFAULT_INTERVAL,
+  TRAKT_DEVICE_POLL_BUDGET_MS
+} from './constants.js';
 import { SUMMARY_PREVIEW_LENGTH } from '../plex/constants.js';
-import { truncate, sanitizeSearchQuery } from '../shared/utils.js';
+import { truncate, sanitizeSearchQuery, sleep } from '../shared/utils.js';
+
+interface PendingDeviceAuth {
+  deviceCode: string;
+  expiresAt: number;
+  intervalMs: number;
+}
 
 export class TraktMCPFunctions {
   private traktClient!: TraktClient;
   private syncEngine!: TraktSyncEngine;
   private mapper: PlexToTraktMapper;
   private isInitialized: boolean = false;
+  private pendingDevice?: PendingDeviceAuth;
 
   constructor(private plexClient: PlexAPIClient) {
     this.mapper = new PlexToTraktMapper();
@@ -70,24 +85,36 @@ export class TraktMCPFunctions {
 
   /**
    * MCP Function: trakt_authenticate
-   * Start OAuth authentication flow
+   * Start the device authorization flow and hand back the code to enter on Trakt.
    */
-  async traktAuthenticate(state?: string): Promise<Record<string, unknown>> {
+  async traktAuthenticate(_state?: string): Promise<Record<string, unknown>> {
     this.initializeTraktClient();
 
     try {
-      const authUrl = this.traktClient.generateAuthUrl(state);
-      
+      const device = await this.traktClient.requestDeviceCode();
+
+      this.pendingDevice = {
+        deviceCode: device.device_code,
+        expiresAt: Date.now() + device.expires_in * 1000,
+        intervalMs: (device.interval || TRAKT_DEVICE_DEFAULT_INTERVAL) * 1000,
+      };
+
+      // Both camelCase and snake_case are emitted so existing clients keep working.
       return {
         success: true,
-        authUrl,
+        userCode: device.user_code,
+        user_code: device.user_code,
+        verificationUrl: device.verification_url,
+        verification_url: device.verification_url,
+        authUrl: device.verification_url,
+        expiresIn: device.expires_in,
+        expires_in: device.expires_in,
         instructions: [
-          '1. Open the provided URL in your browser',
-          '2. Authorize the application on Trakt.tv',
-          '3. Copy the authorization code from the callback',
-          '4. Use trakt_complete_auth with the code to complete setup'
+          `1. Open ${device.verification_url} in your browser`,
+          `2. Enter the code ${device.user_code} and approve the app`,
+          '3. Use trakt_complete_auth (no arguments) to finish setup'
         ],
-        message: 'Visit the auth URL and complete authorization, then use trakt_complete_auth with the code'
+        message: `Open ${device.verification_url} and enter the code ${device.user_code}, then complete the setup.`
       };
     } catch (error) {
       return {
@@ -99,9 +126,10 @@ export class TraktMCPFunctions {
 
   /**
    * MCP Function: trakt_complete_auth
-   * Complete OAuth flow with authorization code
+   * Finish the pending device authorization. Takes no arguments; the legacy
+   * `code` parameter is only honoured when no device flow is in progress.
    */
-  async traktCompleteAuth(code: string): Promise<Record<string, unknown>> {
+  async traktCompleteAuth(code?: string): Promise<Record<string, unknown>> {
     if (!this.isInitialized) {
       return {
         success: false,
@@ -109,38 +137,98 @@ export class TraktMCPFunctions {
       };
     }
 
-    try {
-      const tokens = await this.traktClient.exchangeCodeForToken(code);
-      const user = await this.traktClient.getCurrentUser();
-
+    if (!this.pendingDevice) {
+      if (code) {
+        // Legacy authorization-code exchange, kept for callers that still hold one.
+        try {
+          return this.buildAuthSuccess(await this.traktClient.exchangeCodeForToken(code));
+        } catch (error) {
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : 'Token exchange failed'
+          };
+        }
+      }
       return {
-        success: true,
-        user: {
-          username: user.username,
-          name: user.name,
-          vip: user.vip
-        },
-        tokens: {
-          access_token: tokens.access_token,
-          refresh_token: tokens.refresh_token,
-          expires_in: tokens.expires_in,
-          scope: tokens.scope,
-          created_at: tokens.created_at
-        },
-        message: 'Authentication successful! Add these to your environment config to persist across restarts:',
-        env_config: `TRAKT_ACCESS_TOKEN=${tokens.access_token}\nTRAKT_REFRESH_TOKEN=${tokens.refresh_token}`,
-        nextSteps: [
-          'Add the above TRAKT_ACCESS_TOKEN and TRAKT_REFRESH_TOKEN to your MCP client env config or .env file',
-          'Use trakt_get_auth_status to verify authentication',
-          'Start syncing with trakt_sync_to_trakt'
-        ]
+        success: false,
+        error: 'No authentication in progress. Call trakt_authenticate first.'
       };
+    }
+
+    const { deviceCode, expiresAt, intervalMs } = this.pendingDevice;
+
+    if (Date.now() >= expiresAt) {
+      this.pendingDevice = undefined;
+      return {
+        success: false,
+        error: 'The Trakt code has expired. Call trakt_authenticate to get a new one.'
+      };
+    }
+
+    const deadline = Math.min(Date.now() + TRAKT_DEVICE_POLL_BUDGET_MS, expiresAt);
+
+    try {
+      for (;;) {
+        const result = await this.traktClient.pollDeviceToken(deviceCode);
+
+        if (result.status === 'authorized') {
+          this.pendingDevice = undefined;
+          return this.buildAuthSuccess(result.tokens);
+        }
+
+        if (result.status !== 'pending') {
+          this.pendingDevice = undefined;
+          const reasons: Record<string, string> = {
+            expired: 'The Trakt code has expired. Call trakt_authenticate to get a new one.',
+            denied: 'Authorization was denied on Trakt.',
+            used: 'That Trakt code was already used. Call trakt_authenticate to get a new one.',
+          };
+          return { success: false, error: reasons[result.status] };
+        }
+
+        if (Date.now() + intervalMs >= deadline) {
+          return {
+            success: false,
+            pending: true,
+            message: 'Waiting for approval on Trakt. Enter the code, then run trakt_complete_auth again.'
+          };
+        }
+
+        await sleep(intervalMs);
+      }
     } catch (error) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Token exchange failed'
       };
     }
+  }
+
+  private async buildAuthSuccess(tokens: TraktTokens): Promise<Record<string, unknown>> {
+    const user = await this.traktClient.getCurrentUser();
+
+    return {
+      success: true,
+      user: {
+        username: user.username,
+        name: user.name,
+        vip: user.vip
+      },
+      tokens: {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_in: tokens.expires_in,
+        scope: tokens.scope,
+        created_at: tokens.created_at
+      },
+      message: 'Authentication successful! Add these to your environment config to persist across restarts:',
+      env_config: `TRAKT_ACCESS_TOKEN=${tokens.access_token}\nTRAKT_REFRESH_TOKEN=${tokens.refresh_token}`,
+      nextSteps: [
+        'Add the above TRAKT_ACCESS_TOKEN and TRAKT_REFRESH_TOKEN to your MCP client env config or .env file',
+        'Use trakt_get_auth_status to verify authentication',
+        'Start syncing with trakt_sync_to_trakt'
+      ]
+    };
   }
 
   /**

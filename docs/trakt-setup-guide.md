@@ -76,31 +76,38 @@ This returns:
 ```json
 {
   "success": true,
-  "authUrl": "https://trakt.tv/oauth/authorize?...",
+  "userCode": "S7ZMN8DR",
+  "verificationUrl": "https://auth.trakt.tv/activate",
+  "expiresIn": 600,
   "instructions": [
-    "1. Open the provided URL in your browser",
-    "2. Authorize the application on Trakt.tv", 
-    "3. Copy the authorization code from the callback",
-    "4. Use trakt_complete_auth with the code to complete setup"
+    "1. Open https://auth.trakt.tv/activate in your browser",
+    "2. Enter the code S7ZMN8DR and approve the app",
+    "3. Use trakt_complete_auth (no arguments) to finish setup"
   ]
 }
 ```
 
+> **Why the device flow?** Trakt's browser authorize endpoint now requires PKCE
+> and reports failures by redirecting to the configured `redirect_uri`. For the
+> out-of-band URN that redirect is not navigable, so the old PIN flow can no
+> longer be completed. The device flow needs neither a `redirect_uri` nor PKCE.
+
 ### 4.2 Complete Authentication
 
-1. **Open the auth URL** in your browser
-2. **Authorize the application** on Trakt.tv
-3. **Copy the authorization code** from the success page
-4. **Complete authentication:**
+1. **Open** `https://auth.trakt.tv/activate` in your browser
+2. **Enter the user code** and approve the application
+3. **Complete authentication** — no arguments needed:
 
 ```json
 {
   "function": "trakt_complete_auth",
-  "arguments": {
-    "code": "your_authorization_code_here"
-  }
+  "arguments": {}
 }
 ```
+
+If you have not approved the code yet, this returns `pending: true`; approve it
+on Trakt and call `trakt_complete_auth` again. Codes expire after 10 minutes —
+call `trakt_authenticate` for a fresh one.
 
 ### 4.3 Verify Authentication
 

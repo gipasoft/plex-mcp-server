@@ -22,6 +22,22 @@ export interface TraktTokens {
   created_at: number;
 }
 
+export interface TraktDeviceCode {
+  device_code: string;
+  user_code: string;
+  verification_url: string;
+  expires_in: number;
+  interval: number;
+}
+
+/** Outcome of one device-token poll. */
+export type TraktDevicePollResult =
+  | { status: 'authorized'; tokens: TraktTokens }
+  | { status: 'pending' }
+  | { status: 'expired' }
+  | { status: 'denied' }
+  | { status: 'used' };
+
 export interface TraktAuthStatus {
   authenticated: boolean;
   user?: TraktUser;

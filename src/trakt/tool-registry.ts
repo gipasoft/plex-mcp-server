@@ -14,7 +14,7 @@ export function createTraktToolRegistry(traktFunctions: TraktMCPFunctions): Tool
   );
 
   registry.register("trakt_complete_auth", (args) =>
-    traktFunctions.traktCompleteAuth(args.code as string).then(wrapResponse)
+    traktFunctions.traktCompleteAuth(args.code as string | undefined).then(wrapResponse)
   );
 
   registry.register("trakt_get_auth_status", () =>
