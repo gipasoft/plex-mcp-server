@@ -259,6 +259,47 @@ describe("PlexTools", () => {
     });
   });
 
+  describe("getWatchHistory", () => {
+    it("includes episode hierarchy metadata from session history", async () => {
+      (client.makeRequest as ReturnType<typeof vi.fn>).mockResolvedValue({
+        MediaContainer: {
+          Metadata: [
+            {
+              sessionKey: "session-1",
+              ratingKey: "141844",
+              title: "Episodio #1.8",
+              type: "episode",
+              grandparentTitle: "House of Guinness",
+              parentIndex: 1,
+              index: 8,
+              viewedAt: 1785185004,
+              duration: 3172949,
+              viewOffset: 3172949,
+            },
+            {
+              sessionKey: "session-2",
+              ratingKey: "42",
+              title: "Heat",
+              type: "movie",
+              viewedAt: 1785000000,
+            },
+          ],
+        },
+      });
+
+      const result = parseResponse(await tools.getWatchHistory());
+
+      expect(result.watchHistory[0]).toMatchObject({
+        seriesTitle: "House of Guinness",
+        seasonNumber: 1,
+        episodeNumber: 8,
+      });
+      expect(result.watchHistory[1]).not.toHaveProperty("seriesTitle");
+      expect(result.watchHistory[1]).not.toHaveProperty("seasonNumber");
+      expect(result.watchHistory[1]).not.toHaveProperty("episodeNumber");
+    });
+  });
+
   /**
    * createPlaylist — issue #48
    *
