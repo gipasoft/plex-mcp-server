@@ -9,7 +9,6 @@ services:
       - .env
     volumes:
       - ./config.json:/config/config.json:ro
-      - ./bin/trilium-mcp:/usr/local/bin/trilium-mcp:ro
     ports:
       - "9097:9090"
     command: ["-config", "/config/config.json"]
