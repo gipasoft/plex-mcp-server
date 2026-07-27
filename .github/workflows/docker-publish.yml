@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - "fix/**"
     tags:
       - "v*.*.*"
   pull_request:
@@ -49,7 +50,10 @@ jobs:
 
   pull-request-image:
     name: Build and smoke-test pull request image
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/heads/fix/'))
     needs: verify
     runs-on: ubuntu-latest
     permissions:
