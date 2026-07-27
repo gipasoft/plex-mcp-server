@@ -1,9 +1,9 @@
 # Distribuzione QNAP da GHCR
 
 Questa procedura aggiorna **soltanto** il proxy `plex-mcp` dell'applicazione
-esistente in QNAP Container Station. Paperless, Trilium, autenticazione,
-mount, porte, reti, label e impostazioni specifiche di Container Station
-devono restare invariati. Il NAS deve usare architettura `x86_64` (`amd64`).
+esistente in QNAP Container Station. Autenticazione, mount, porte, reti,
+label e impostazioni specifiche di Container Station devono restare
+invariati. Il NAS deve usare architettura `x86_64` (`amd64`).
 
 L'immagine viene costruita e pubblicata solamente da GitHub Actions. Sul NAS
 non devono comparire né `build:` nel Compose né comandi
@@ -33,9 +33,14 @@ services:
     image: ghcr.io/gipasoft/plex-mcp-server:latest
 ```
 
-Preservare i servizi reali Paperless e Trilium, `env_file`, variabili,
-autenticazione, mount, porta `9097:9090`, rete `qnap-network`, label, policy di
-restart e ogni impostazione aggiunta da Container Station.
+Preservare `env_file`, variabili, autenticazione, i mount di `config.json` e del
+binario `bin/trilium-mcp`, porta `9097:9090`, rete `qnap-network`, label, policy
+di restart e ogni impostazione aggiunta da Container Station.
+
+`paperless-mcp` non è un servizio di questo Compose: gira in un'applicazione
+Container Station separata, raggiungibile sulla stessa rete `qnap-network`. Non
+va reintrodotto qui, altrimenti si torna al conflitto sul nome del container.
+Anche Trilium non è un servizio a sé: è il binario montato in `plex-mcp`.
 
 Il blocco seguente è facoltativo: aggiungerlo al solo servizio `plex-mcp` se si
 desidera che Docker controlli la porta TCP del proxy o se Container Station
@@ -85,7 +90,7 @@ Validare il file **attivo**, quindi ricreare soltanto il proxy:
 ```bash
 docker compose config --quiet
 docker compose pull plex-mcp
-docker compose up -d --no-deps plex-mcp
+docker compose up -d plex-mcp
 docker compose ps
 docker compose logs --since=10m --tail=200 plex-mcp
 ```
@@ -94,7 +99,8 @@ docker compose logs --since=10m --tail=200 plex-mcp
 l'eventuale healthcheck, senza stampare i valori risolti da variabili ed
 `env_file`; non avvia container e non esegue l'healthcheck. È
 `docker compose up` ad avviare il container e Docker a eseguire
-l'healthcheck. Il primo `up` con `--no-deps` non ricrea Paperless.
+l'healthcheck. Nominare il servizio nel comando `up` mantiene l'intervento
+circoscritto al proxy.
 
 Attendere che `plex-mcp` resti `Up`; se è stato dichiarato l'healthcheck,
 attendere anche lo stato `healthy`. Nei log non devono apparire errori di
@@ -224,7 +230,7 @@ cp docker-compose.yml.pre-plex-fork docker-compose.yml
 cp config.json.pre-plex-fork config.json
 docker compose config --quiet
 docker compose pull plex-mcp
-docker compose up -d --no-deps plex-mcp
+docker compose up -d plex-mcp
 docker compose ps
 docker compose logs --since=10m --tail=200 plex-mcp
 ```
@@ -247,7 +253,7 @@ garantito, copiare il riferimento **reale** dal riepilogo della run nel campo
 ```bash
 docker compose config --quiet
 docker compose pull plex-mcp
-docker compose up -d --no-deps plex-mcp
+docker compose up -d plex-mcp
 docker compose ps
 ```
 
