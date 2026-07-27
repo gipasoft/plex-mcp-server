@@ -23,6 +23,17 @@ Include:
 - Dependency vulnerabilities are scanned via CI (`npm audit`, CodeQL, TruffleHog)
 - Dependabot auto-merges patch/minor dependency updates
 
+## Dependency audit policy
+
+CI blocks all high and critical npm advisories.
+
+MCP SDK 1.29.0 currently depends on `@hono/node-server` 1.x, leaving
+`GHSA-frvp-7c67-39w9` unresolved without an incompatible forced SDK
+downgrade. The advisory affects `serve-static` path handling on Windows;
+this project runs MCP over stdio inside a Linux container and does not use
+that path. Remove this exception as soon as MCP SDK supports
+`@hono/node-server` 2.0.5 or later.
+
 ## Out of Scope
 
 - Plex Media Server vulnerabilities (report to [Plex](https://www.plex.tv/security/))

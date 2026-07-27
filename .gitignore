@@ -157,6 +157,26 @@ exports/
 # API keys and secrets (if stored in files)
 *.key
 *.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+*.p7b
+*.p7c
+*.p8
+*.jks
+*.keystore
+*.csr
+*.der
+*.ppk
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+.npmrc
+/config.json
+/config.json.*
+/config.*.json
 secrets.json
 config.local.json
 

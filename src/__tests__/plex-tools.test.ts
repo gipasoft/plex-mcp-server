@@ -229,6 +229,34 @@ describe("PlexTools", () => {
       expect(result.onDeck[0]).toHaveProperty("viewOffset", 5000);
       expect(result.onDeck[0]).not.toHaveProperty("summary");
     });
+
+    it("includes series, season, and episode metadata for episodes", async () => {
+      (client.makeRequest as ReturnType<typeof vi.fn>).mockResolvedValue({
+        MediaContainer: {
+          Metadata: [
+            {
+              ratingKey: "35475",
+              title: "Ali oscure, oscure parole",
+              type: "episode",
+              grandparentTitle: "Il Trono di Spade",
+              parentIndex: 3,
+              index: 2,
+              viewOffset: 125000,
+              duration: 3425504,
+              lastViewedAt: 1784840745,
+            },
+          ],
+        },
+      });
+
+      const result = parseResponse(await tools.getOnDeck());
+
+      expect(result.onDeck[0]).toMatchObject({
+        seriesTitle: "Il Trono di Spade",
+        seasonNumber: 3,
+        episodeNumber: 2,
+      });
+    });
   });
 
   /**
