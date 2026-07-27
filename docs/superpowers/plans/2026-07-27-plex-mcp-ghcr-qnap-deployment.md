@@ -571,9 +571,11 @@ jobs:
   publish:
     name: Build, smoke-test, and publish container
     if: >-
-      github.event_name != 'pull_request' &&
-      (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||
-      startsWith(github.ref, 'refs/tags/v'))
+      (github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v'))) ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main')
     needs: verify
     runs-on: ubuntu-latest
     permissions:
@@ -632,28 +634,44 @@ jobs:
       - name: Smoke test candidate
         run: node scripts/smoke-test-image.mjs "${{ steps.candidate.outputs.image }}"
 
-      - name: Push exact tested local tags
+      - name: Push exact tested local tags and record digest
+        id: published
         env:
           IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
+          set -euo pipefail
+          PUBLISHED_DIGEST=""
+
           while IFS= read -r tag; do
             test -n "$tag" || continue
             docker image inspect "$tag" >/dev/null
-            docker push "$tag"
+
+            if ! PUSH_OUTPUT="$(docker push "$tag" 2>&1)"; then
+              printf '%s\n' "$PUSH_OUTPUT" >&2
+              exit 1
+            fi
+            printf '%s\n' "$PUSH_OUTPUT"
+
+            TAG_DIGEST="$(
+              printf '%s\n' "$PUSH_OUTPUT" |
+                sed -nE 's/^.*digest: (sha256:[0-9a-f]{64})([[:space:]].*)?$/\1/p' |
+                tail -n 1
+            )"
+            if ! printf '%s\n' "$TAG_DIGEST" |
+              grep -Eq '^sha256:[0-9a-f]{64}$'; then
+              echo "Digest mancante o non valido per $tag" >&2
+              exit 1
+            fi
+
+            if [[ -z "$PUBLISHED_DIGEST" ]]; then
+              PUBLISHED_DIGEST="$TAG_DIGEST"
+            elif [[ "$TAG_DIGEST" != "$PUBLISHED_DIGEST" ]]; then
+              echo "Digest non coerente per $tag: $TAG_DIGEST (atteso $PUBLISHED_DIGEST)" >&2
+              exit 1
+            fi
           done <<< "$IMAGE_TAGS"
 
-      - name: Record published digest
-        id: published
-        env:
-          SMOKE_IMAGE: ${{ steps.candidate.outputs.image }}
-        run: |
-          PUBLISHED_DIGEST="$(
-            docker buildx imagetools inspect "$SMOKE_IMAGE" |
-              sed -n 's/^Digest:[[:space:]]*//p' |
-              head -n 1
-          )"
-          printf '%s\n' "$PUBLISHED_DIGEST" |
-            grep -Eq '^sha256:[0-9a-f]{64}$'
+          test -n "$PUBLISHED_DIGEST"
           IMMUTABLE_REFERENCE="${REGISTRY}/${IMAGE_NAME}@${PUBLISHED_DIGEST}"
           echo "digest=$PUBLISHED_DIGEST" >> "$GITHUB_OUTPUT"
           echo "immutable_reference=$IMMUTABLE_REFERENCE" >> "$GITHUB_OUTPUT"
@@ -675,7 +693,7 @@ node scripts/smoke-test-image.mjs plex-mcp-server:test
 
 Poi controllare che `metadata-action` usi sette caratteri per `type=sha`,
 fissati da `DOCKER_METADATA_SHORT_SHA_LENGTH: 7`, e che `latest` sia abilitato
-esclusivamente sul branch predefinito.
+esclusivamente su `main`.
 
 - [ ] **Passo 3: controllare sintassi e permessi**
 
@@ -692,13 +710,16 @@ Controllare manualmente che:
   `needs: verify`;
 - i job PR abbiano solo `contents: read`;
 - `packages: write` sia presente esclusivamente nel job `publish`;
-- il job `publish` sia eseguito soltanto sul branch predefinito o su tag
-  `v*.*.*`;
+- il job `publish` sia eseguito soltanto per un evento `push` su `main`, un
+  evento `push` di tag `v*.*.*`, oppure un `workflow_dispatch` selezionato su
+  `refs/heads/main`; un dispatch manuale su un tag deve saltare il job;
 - la build pubblicabile usi `load: true` e `push: false`;
 - lo smoke test preceda il ciclo `docker push` degli stessi tag locali;
 - non esista una seconda build dopo lo smoke test;
-- digest e riferimento `image@sha256:<digest>` siano output e riepilogo della
-  run;
+- ogni `docker push` fornisca direttamente il digest dello stesso artefatto
+  locale, tutti i digest coincidano e nessun tag del registry venga
+  ri-risolto; digest e riferimento `image@sha256:<digest>` devono essere
+  output e riepilogo della run;
 - la piattaforma sia `linux/amd64`;
 - nessun secret personalizzato sia richiesto.
 
@@ -819,7 +840,7 @@ Inserire:
 ```bash
 cp docker-compose.yml docker-compose.yml.pre-plex-fork
 cp config.json config.json.pre-plex-fork
-docker compose config
+docker compose config --quiet
 docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
 docker compose ps
@@ -828,14 +849,16 @@ docker compose logs --tail=100 plex-mcp
 
 Spiegare che il primo `up` ricrea soltanto il proxy e non Paperless. Vietare
 esplicitamente `cp docker-compose.qnap.yml docker-compose.yml`. Precisare che
-`docker compose config` valida e normalizza l'healthcheck dichiarato ma non lo
-esegue; è Docker a eseguirlo dopo `docker compose up`.
+`docker compose config --quiet` valida l'healthcheck dichiarato senza stampare
+segreti risolti da variabili o `env_file`, ma non lo esegue; è Docker a
+eseguirlo dopo `docker compose up`.
 
 - [ ] **Passo 4: documentare aggiornamenti ordinari**
 
 Inserire:
 
 ```bash
+docker compose config --quiet
 docker compose pull
 docker compose up -d
 ```
@@ -850,6 +873,7 @@ Inserire:
 ```bash
 cp docker-compose.yml.pre-plex-fork docker-compose.yml
 cp config.json.pre-plex-fork config.json
+docker compose config --quiet
 docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
 ```
@@ -884,13 +908,13 @@ Dalla cartella reale dell'applicazione, dopo aver preservato tutti i file e
 aver applicato soltanto le modifiche approvate al Compose attivo, eseguire:
 
 ```bash
-docker compose config
+docker compose config --quiet
 ```
 
-Risultato atteso: exit code `0`, immagine
-`ghcr.io/gipasoft/plex-mcp-server:latest`, rete esterna `qnap-network` e
-ogni impostazione reale preservata. Se è stato aggiunto l'healthcheck,
-controllarne la dichiarazione normalizzata; il comando non lo esegue.
+Risultato atteso: exit code `0` senza stampare la configurazione risolta.
+Controllare separatamente nel file attivo che la modifica resti limitata
+all'immagine e all'eventuale healthcheck approvato; il comando valida la
+dichiarazione ma non esegue l'healthcheck.
 
 - [ ] **Passo 8: creare il commit QNAP**
 
@@ -933,7 +957,7 @@ PAPERLESS_API_TOKEN=validation-only \
 docker compose \
   --project-directory "$QNAP_CHECK_DIR" \
   -f "$QNAP_CHECK_DIR/docker-compose.yml" \
-  config
+  config --quiet
 git diff --check origin/main...HEAD
 git status --short
 ```
@@ -953,9 +977,11 @@ Eseguire inoltre asserzioni statiche focalizzate che falliscano prima della
 correzione e riescano dopo, verificando almeno: audit nel gate, permessi
 read-only sulle PR, `packages: write` solo su `publish`, build caricata e
 smoke-testata prima di ogni `docker push`, assenza di rebuild post-smoke,
-digest nel riepilogo/output, `latest` soltanto dal branch predefinito,
-procedura QNAP senza sovrascrittura, tre route MCP, rollback a digest e pattern
-di esclusione dei segreti.
+digest acquisito direttamente da ogni output di push e coerente fra i tag,
+assenza di ri-risoluzione post-push, condizioni evento esplicite con dispatch
+manuale solo su `refs/heads/main`, `latest` soltanto su `main`, procedura QNAP
+senza sovrascrittura e con validazione quiet, tre route MCP, rollback a digest
+e pattern di esclusione dei segreti.
 
 - [ ] **Passo 2: richiedere una code review indipendente**
 
@@ -1009,7 +1035,7 @@ senza la scelta esplicita dell'utente.
 **Interfacce:**
 
 - Consuma: Pull Request approvata e workflow `Docker`.
-- Produce: `latest` dal branch predefinito, tag `sha-*` correlati al commit,
+- Produce: `latest` esclusivamente da `main`, tag `sha-*` correlati al commit,
   digest manifest registrato e riferimento immutabile
   `image@sha256:<digest>` pubblici su GHCR.
 
@@ -1048,9 +1074,12 @@ gh run watch "$PLEX_RUN_ID" --repo gipasoft/plex-mcp-server
 
 La run deve mostrare, prima di qualsiasi push: `npm audit
 --audit-level=high`, test, build TypeScript, build Docker caricata e smoke test.
-Il riepilogo deve contenere il digest manifest e il riferimento immutabile. Lo
-stesso gate vale per push `main`, tag versione e pubblicazioni manuali da
-`main`.
+Ogni push deve riportare lo stesso digest, acquisito direttamente dall'output
+del comando `docker push` senza ri-risolvere un tag del registry. Il riepilogo
+deve contenere quel digest manifest e il riferimento immutabile. Lo stesso gate
+vale per push `main`, push di tag versione e pubblicazioni manuali da `main`;
+un dispatch manuale selezionato su un tag storico deve saltare la
+pubblicazione.
 
 - [ ] **Passo 3: verificare package, tag e digest**
 
@@ -1172,13 +1201,13 @@ label, restart policy o impostazioni Container Station.
 - [ ] **Passo 3: validare senza ricreare container**
 
 ```bash
-docker compose config
+docker compose config --quiet
 ```
 
 Risultato atteso: exit code `0`.
 
-Il comando valida la dichiarazione dell'eventuale healthcheck, ma non lo
-esegue e non ricrea container.
+Il comando valida la dichiarazione dell'eventuale healthcheck senza stampare
+segreti risolti, ma non lo esegue e non ricrea container.
 
 - [ ] **Passo 4: scaricare l'immagine e ricreare solo il proxy**
 
@@ -1256,7 +1285,7 @@ reale non contiene i tre campi o Plex AI Client perde una sorgente:
 ```bash
 cp docker-compose.yml.pre-plex-fork docker-compose.yml
 cp config.json.pre-plex-fork config.json
-docker compose config
+docker compose config --quiet
 docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
 docker compose ps
@@ -1266,11 +1295,12 @@ docker compose logs --since=10m --tail=200 plex-mcp
 Se tutte le verifiche riescono, conservare i backup e usare in futuro:
 
 ```bash
+docker compose config --quiet
 docker compose pull
 docker compose up -d
 ```
 
 Per un rollback garantito a una build del fork, impostare nel Compose attivo il
 riferimento `ghcr.io/gipasoft/plex-mcp-server@sha256:<digest-reale>` registrato
-nella run, validare con `docker compose config` e ricreare soltanto
+nella run, validare con `docker compose config --quiet` e ricreare soltanto
 `plex-mcp`. Non considerare immutabile il tag `sha-*`.

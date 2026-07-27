@@ -78,9 +78,11 @@ jobs:
   publish:
     name: Build, smoke-test, and publish container
     if: >-
-      github.event_name != 'pull_request' &&
-      (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||
-      startsWith(github.ref, 'refs/tags/v'))
+      (github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v'))) ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main')
     needs: verify
     runs-on: ubuntu-latest
     permissions:
@@ -139,28 +141,44 @@ jobs:
       - name: Smoke test candidate
         run: node scripts/smoke-test-image.mjs "${{ steps.candidate.outputs.image }}"
 
-      - name: Push exact tested local tags
+      - name: Push exact tested local tags and record digest
+        id: published
         env:
           IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
+          set -euo pipefail
+          PUBLISHED_DIGEST=""
+
           while IFS= read -r tag; do
             test -n "$tag" || continue
             docker image inspect "$tag" >/dev/null
-            docker push "$tag"
+
+            if ! PUSH_OUTPUT="$(docker push "$tag" 2>&1)"; then
+              printf '%s\n' "$PUSH_OUTPUT" >&2
+              exit 1
+            fi
+            printf '%s\n' "$PUSH_OUTPUT"
+
+            TAG_DIGEST="$(
+              printf '%s\n' "$PUSH_OUTPUT" |
+                sed -nE 's/^.*digest: (sha256:[0-9a-f]{64})([[:space:]].*)?$/\1/p' |
+                tail -n 1
+            )"
+            if ! printf '%s\n' "$TAG_DIGEST" |
+              grep -Eq '^sha256:[0-9a-f]{64}$'; then
+              echo "Digest mancante o non valido per $tag" >&2
+              exit 1
+            fi
+
+            if [[ -z "$PUBLISHED_DIGEST" ]]; then
+              PUBLISHED_DIGEST="$TAG_DIGEST"
+            elif [[ "$TAG_DIGEST" != "$PUBLISHED_DIGEST" ]]; then
+              echo "Digest non coerente per $tag: $TAG_DIGEST (atteso $PUBLISHED_DIGEST)" >&2
+              exit 1
+            fi
           done <<< "$IMAGE_TAGS"
 
-      - name: Record published digest
-        id: published
-        env:
-          SMOKE_IMAGE: ${{ steps.candidate.outputs.image }}
-        run: |
-          PUBLISHED_DIGEST="$(
-            docker buildx imagetools inspect "$SMOKE_IMAGE" |
-              sed -n 's/^Digest:[[:space:]]*//p' |
-              head -n 1
-          )"
-          printf '%s\n' "$PUBLISHED_DIGEST" |
-            grep -Eq '^sha256:[0-9a-f]{64}$'
+          test -n "$PUBLISHED_DIGEST"
           IMMUTABLE_REFERENCE="${REGISTRY}/${IMAGE_NAME}@${PUBLISHED_DIGEST}"
           echo "digest=$PUBLISHED_DIGEST" >> "$GITHUB_OUTPUT"
           echo "immutable_reference=$IMMUTABLE_REFERENCE" >> "$GITHUB_OUTPUT"

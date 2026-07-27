@@ -83,17 +83,18 @@ cambiare. Non inserire token, URL privati o altri segreti nel repository.
 Validare il file **attivo**, quindi ricreare soltanto il proxy:
 
 ```bash
-docker compose config
+docker compose config --quiet
 docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
 docker compose ps
 docker compose logs --since=10m --tail=200 plex-mcp
 ```
 
-`docker compose config` valida e normalizza la configurazione dichiarata,
-incluso l'eventuale healthcheck; non avvia container e non esegue
-l'healthcheck. È `docker compose up` ad avviare il container e Docker a
-eseguire l'healthcheck. Il primo `up` con `--no-deps` non ricrea Paperless.
+`docker compose config --quiet` valida la configurazione attiva, incluso
+l'eventuale healthcheck, senza stampare i valori risolti da variabili ed
+`env_file`; non avvia container e non esegue l'healthcheck. È
+`docker compose up` ad avviare il container e Docker a eseguire
+l'healthcheck. Il primo `up` con `--no-deps` non ricrea Paperless.
 
 Attendere che `plex-mcp` resti `Up`; se è stato dichiarato l'healthcheck,
 attendere anche lo stato `healthy`. Nei log non devono apparire errori di
@@ -221,7 +222,7 @@ oppure Plex AI Client perde una delle tre sorgenti:
 ```bash
 cp docker-compose.yml.pre-plex-fork docker-compose.yml
 cp config.json.pre-plex-fork config.json
-docker compose config
+docker compose config --quiet
 docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
 docker compose ps
@@ -244,7 +245,7 @@ garantito, copiare il riferimento **reale** dal riepilogo della run nel campo
 `image` del `docker-compose.yml` attivo, quindi:
 
 ```bash
-docker compose config
+docker compose config --quiet
 docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
 docker compose ps
@@ -258,6 +259,7 @@ Il tag `sha-*` resta utile per correlare commit e build, ma il solo riferimento
 Per ogni versione pubblicata, dalla stessa cartella dell'applicazione:
 
 ```bash
+docker compose config --quiet
 docker compose pull
 docker compose up -d
 ```

@@ -7,6 +7,7 @@ image built exclusively by GitHub Actions, so the QNAP installation can be
 updated with:
 
 ```bash
+docker compose config --quiet
 docker compose pull
 docker compose up -d
 ```
@@ -131,7 +132,8 @@ The Docker workflow will support:
 - pull requests targeting `main`;
 - pushes to `main`;
 - tags matching `v*.*.*`;
-- manual `workflow_dispatch`.
+- manual `workflow_dispatch` only when the selected ref is
+  `refs/heads/main`.
 
 Pull requests will run:
 
@@ -146,7 +148,11 @@ Pushes to `main`, version tags, and manual runs from `main` will publish only
 after the same dependency audit, tests, and TypeScript build pass. The
 publishing job builds and loads the candidate once with every metadata tag,
 smoke-tests one of those exact local tags, then runs `docker push` for each
-exact local tag. It never rebuilds between smoke test and publication.
+exact local tag. The job condition distinguishes the event type explicitly:
+only a `push` to `main`, a `push` of a `v*.*.*` tag, or a
+`workflow_dispatch` on `refs/heads/main` can publish. A manual run selected on
+a historical version tag skips publication. The job never rebuilds between
+smoke test and publication.
 
 Workflow and PR jobs default to read-only repository contents. Only the
 publication job receives package-write permission through the repository
@@ -170,10 +176,14 @@ Published tags will be:
   published commit;
 - `X.Y.Z` and `X.Y` for a `vX.Y.Z` Git tag.
 
-`latest` is emitted only when the source ref is the repository default branch,
-never for a version tag. After all tags have been pushed, the workflow resolves
-the GHCR manifest digest, exposes it as a job output, and writes both the digest
-and `ghcr.io/gipasoft/plex-mcp-server@sha256:<digest>` to the Actions summary.
+`latest` is emitted only when the source ref is `main`, never for a version
+tag. Each `docker push` output supplies the manifest digest for the exact local
+tag that was loaded and smoke-tested. The workflow rejects a missing or
+malformed digest and fails if any pushed tag reports a different digest. It
+does not re-resolve a mutable registry tag after publication. The common
+push-reported digest is exposed as a job output, and both the digest and
+`ghcr.io/gipasoft/plex-mcp-server@sha256:<digest>` are written to the Actions
+summary.
 
 The image target is only `linux/amd64`, matching the QNAP `x86_64`
 architecture. Multi-platform emulation is intentionally excluded.
@@ -232,20 +242,22 @@ the sanitized repository Compose over the active file.
 Validate and deploy only the proxy service during the first migration:
 
 ```bash
-docker compose config
+docker compose config --quiet
 docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
 docker compose ps
 docker compose logs --tail=100 plex-mcp
 ```
 
-`docker compose config` validates and normalizes the declared healthcheck; it
-does not execute it. Docker begins executing a declared healthcheck only after
-`docker compose up`.
+`docker compose config --quiet` validates the active configuration and the
+declared healthcheck without printing resolved environment or `env_file`
+secrets. It does not execute the healthcheck. Docker begins executing a
+declared healthcheck only after `docker compose up`.
 
 After successful migration, normal updates use:
 
 ```bash
+docker compose config --quiet
 docker compose pull
 docker compose up -d
 ```
@@ -263,7 +275,10 @@ Automated repository verification requires:
 - a container smoke test to confirm that `/main` can start with a valid
   mounted proxy configuration and that the embedded Plex command exists;
 - static checks that publication pushes only the loaded, smoke-tested local
-  tags and that package-write permission belongs only to the publishing job.
+  tags, captures one identical digest directly from every push output without a
+  registry lookup, authorizes only the three intended event/ref combinations,
+  uses quiet active-Compose validation, and grants package-write permission
+  only to the publishing job.
 
 QNAP verification requires:
 
@@ -291,7 +306,7 @@ image: ghcr.io/gipasoft/plex-mcp-server@sha256:<recorded-manifest-digest>
 Then validate and deploy only the proxy:
 
 ```bash
-docker compose config
+docker compose config --quiet
 docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
 docker compose ps
@@ -302,7 +317,7 @@ To restore the pre-fork deployment:
 ```bash
 cp docker-compose.yml.pre-plex-fork docker-compose.yml
 cp config.json.pre-plex-fork config.json
-docker compose config
+docker compose config --quiet
 docker compose pull plex-mcp
 docker compose up -d --no-deps plex-mcp
 ```
