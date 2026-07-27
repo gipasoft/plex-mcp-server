@@ -1,6 +1,6 @@
 # Trilium MCP incorporato nell'immagine proxy
 
-**Data:** 27 luglio 2026  
+**Data:** 27 luglio 2026
 **Stato:** approvato per la pianificazione
 
 ## Obiettivo
