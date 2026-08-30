@@ -27,7 +27,7 @@ This MCP server transforms your Plex Media Server into an AI-queryable database.
 
 ## Features
 
-**45 tools** out of the box (54 with write operations enabled):
+**46 tools** out of the box (55 with write operations enabled):
 
 - **Plex Library Management** — Browse libraries, search media, get detailed metadata, list playlists and watchlist
 - **Tautulli-Style Analytics** — Viewing statistics, user activity, popular content, watch history
@@ -227,13 +227,14 @@ Set `PLEX_ENABLE_MUTATIVE_OPS=true` to enable these tools. They allow your AI as
 |----------|-------------|
 | `arr_get_status` | Check Sonarr/Radarr connection status |
 
-### Trakt Tools (9 tools)
+### Trakt Tools (10 tools)
 
 | Function | Description |
 |----------|-------------|
 | `trakt_authenticate` | Start Trakt.tv OAuth flow |
 | `trakt_complete_auth` | Complete authentication |
 | `trakt_get_auth_status` | Check auth status |
+| `trakt_add_movie_to_history` | Add one movie viewing at an explicit date/time |
 | `trakt_sync_to_trakt` | Sync Plex history to Trakt |
 | `trakt_sync_from_trakt` | Get Trakt data for comparison |
 | `trakt_get_user_stats` | Enhanced stats from Trakt |

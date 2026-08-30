@@ -74,6 +74,61 @@ describe("TraktMCPFunctions", () => {
     });
   });
 
+  describe("traktAddMovieToHistory", () => {
+    it("resolves the Trakt ID and adds exactly one timestamped movie play", async () => {
+      const getMovie = vi.fn().mockResolvedValue({
+        title: "Close Encounters of the Third Kind",
+        year: 1977,
+        ids: { trakt: 114, slug: "close-encounters", imdb: "tt0075860", tmdb: 840 },
+      });
+      const syncWatchedMovies = vi.fn().mockResolvedValue({
+        added: { movies: 1, shows: 0, seasons: 0, episodes: 0 },
+        existing: { movies: 0, shows: 0, seasons: 0, episodes: 0 },
+        not_found: { movies: [], shows: [], seasons: [], episodes: [] },
+      });
+      // @ts-expect-error — force init for test
+      trakt.isInitialized = true;
+      // @ts-expect-error — mock traktClient
+      trakt.traktClient = { getMovie, syncWatchedMovies };
+
+      const result = await trakt.traktAddMovieToHistory({
+        traktId: 114,
+        title: "Incontri ravvicinati del terzo tipo",
+        watchedAt: "2026-08-30T21:00:00+02:00",
+      });
+
+      expect(getMovie).toHaveBeenCalledWith(114);
+      expect(syncWatchedMovies).toHaveBeenCalledWith([{
+        watched_at: "2026-08-30T19:00:00.000Z",
+        ids: { trakt: 114 },
+        title: "Close Encounters of the Third Kind",
+        year: 1977,
+      }]);
+      expect(result).toMatchObject({
+        success: true,
+        watchedAt: "2026-08-30T19:00:00.000Z",
+        added: 1,
+      });
+    });
+
+    it.each([
+      { traktId: 0, title: "Film", watchedAt: "2026-08-30T21:00:00+02:00" },
+      { traktId: 114, title: "", watchedAt: "2026-08-30T21:00:00+02:00" },
+      { traktId: 114, title: "Film", watchedAt: "2026-08-30T21:00:00" },
+    ])("rejects invalid or timezone-less input %#", async (input) => {
+      // @ts-expect-error — force init for test
+      trakt.isInitialized = true;
+      const syncWatchedMovies = vi.fn();
+      // @ts-expect-error — mock traktClient
+      trakt.traktClient = { syncWatchedMovies };
+
+      const result = await trakt.traktAddMovieToHistory(input);
+
+      expect(result.success).toBe(false);
+      expect(syncWatchedMovies).not.toHaveBeenCalled();
+    });
+  });
+
   describe("traktSyncFromTrakt", () => {
     it("respects TRAKT_PREVIEW_LIMIT for watched items", async () => {
       const movies = Array.from({ length: 200 }, (_, i) => ({

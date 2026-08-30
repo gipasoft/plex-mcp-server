@@ -35,6 +35,31 @@ export const TRAKT_TOOL_SCHEMAS = [
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
+    name: "trakt_add_movie_to_history",
+    description:
+      "Add one confirmed movie viewing to Trakt.tv history at an explicit timestamp. " +
+      "Use trakt_search first and pass the selected Trakt movie ID.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        traktId: {
+          type: "number",
+          description: "Exact Trakt movie ID returned by trakt_search",
+        },
+        title: {
+          type: "string",
+          description: "Movie title shown to the user when confirming the write",
+        },
+        watchedAt: {
+          type: "string",
+          description:
+            "Viewing date and time as ISO 8601 with an explicit timezone, for example 2026-08-30T21:00:00+02:00",
+        },
+      },
+      required: ["traktId", "title", "watchedAt"],
+    },
+  },
+  {
     name: "trakt_sync_to_trakt",
     description: "Sync Plex watch history to Trakt.tv",
     inputSchema: {

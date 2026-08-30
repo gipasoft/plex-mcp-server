@@ -24,17 +24,17 @@ describe("Unified server — tool registration", () => {
     ...PLEX_MUTATIVE_TOOL_SCHEMAS,
   ];
 
-  it("registers exactly 45 tools without mutative ops", () => {
+  it("registers exactly 46 tools without mutative ops", () => {
     const names = allBaseSchemas.map((s) => s.name);
-    expect(names).toHaveLength(45);
+    expect(names).toHaveLength(46);
     // No duplicates
-    expect(new Set(names).size).toBe(45);
+    expect(new Set(names).size).toBe(46);
   });
 
-  it("registers exactly 54 tools with mutative ops", () => {
+  it("registers exactly 55 tools with mutative ops", () => {
     const names = allSchemasWithMutative.map((s) => s.name);
-    expect(names).toHaveLength(54);
-    expect(new Set(names).size).toBe(54);
+    expect(names).toHaveLength(55);
+    expect(new Set(names).size).toBe(55);
   });
 
   it("includes plex core tools", () => {
@@ -60,6 +60,7 @@ describe("Unified server — tool registration", () => {
     const names = allBaseSchemas.map((s) => s.name);
     expect(names).toContain("trakt_authenticate");
     expect(names).toContain("trakt_search");
+    expect(names).toContain("trakt_add_movie_to_history");
     expect(names).toContain("trakt_sync_to_trakt");
     expect(names).toContain("trakt_get_user_stats");
   });
@@ -144,6 +145,7 @@ describe("Unified server — dispatch routing", () => {
   it("trakt registry owns trakt tools", () => {
     expect(traktRegistry.has("trakt_authenticate")).toBe(true);
     expect(traktRegistry.has("trakt_search")).toBe(true);
+    expect(traktRegistry.has("trakt_add_movie_to_history")).toBe(true);
     expect(traktRegistry.has("trakt_sync_to_trakt")).toBe(true);
   });
 

@@ -268,6 +268,71 @@ export class TraktMCPFunctions {
     }
   }
 
+  /** Add one explicitly identified movie viewing to Trakt history. */
+  async traktAddMovieToHistory(input: {
+    traktId: number;
+    title: string;
+    watchedAt: string;
+  }): Promise<Record<string, unknown>> {
+    if (!Number.isInteger(input.traktId) || input.traktId <= 0) {
+      return { success: false, error: 'A positive integer Trakt movie ID is required' };
+    }
+
+    const requestedTitle = input.title?.trim();
+    if (!requestedTitle) {
+      return { success: false, error: 'A movie title is required for confirmation' };
+    }
+
+    if (
+      typeof input.watchedAt !== 'string' ||
+      !/T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(input.watchedAt) ||
+      Number.isNaN(Date.parse(input.watchedAt))
+    ) {
+      return {
+        success: false,
+        error: 'watchedAt must be a valid ISO 8601 date-time with an explicit timezone'
+      };
+    }
+
+    if (!this.isInitialized) {
+      this.initializeTraktClient();
+    }
+
+    try {
+      const movie = await this.traktClient.getMovie(input.traktId);
+      const watchedAt = new Date(input.watchedAt).toISOString();
+      const result = await this.traktClient.syncWatchedMovies([{
+        watched_at: watchedAt,
+        ids: { trakt: movie.ids.trakt },
+        title: movie.title,
+        year: movie.year,
+      }]);
+      const notFound = result.not_found.movies.length > 0;
+
+      return {
+        success: !notFound,
+        movie: {
+          title: movie.title,
+          year: movie.year,
+          traktId: movie.ids.trakt,
+        },
+        requestedTitle,
+        watchedAt,
+        added: result.added.movies,
+        existing: result.existing.movies,
+        notFound: result.not_found.movies,
+        message: notFound
+          ? 'Trakt did not recognize the selected movie'
+          : `Viewing added to Trakt history for ${movie.title}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to add movie viewing to Trakt history'
+      };
+    }
+  }
+
   /**
    * MCP Function: trakt_sync_to_trakt
    * Sync Plex watch history to Trakt

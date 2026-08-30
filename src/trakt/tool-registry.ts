@@ -21,6 +21,14 @@ export function createTraktToolRegistry(traktFunctions: TraktMCPFunctions): Tool
     traktFunctions.traktGetAuthStatus().then(wrapResponse)
   );
 
+  registry.register("trakt_add_movie_to_history", (args) =>
+    traktFunctions.traktAddMovieToHistory({
+      traktId: args.traktId as number,
+      title: args.title as string,
+      watchedAt: args.watchedAt as string,
+    }).then(wrapResponse)
+  );
+
   registry.register("trakt_sync_to_trakt", (args) =>
     traktFunctions.traktSyncToTrakt({
       dryRun: args.dryRun as boolean | undefined,
