@@ -115,7 +115,9 @@ describe("TraktMCPFunctions", () => {
       { traktId: 0, title: "Film", watchedAt: "2026-08-30T21:00:00+02:00" },
       { traktId: 114, title: "", watchedAt: "2026-08-30T21:00:00+02:00" },
       { traktId: 114, title: "Film", watchedAt: "2026-08-30T21:00:00" },
-    ])("rejects invalid or timezone-less input %#", async (input) => {
+      { traktId: 114, title: "Film", watchedAt: "2026-08-30T21:00:00Z" },
+      { traktId: 114, title: "Film", watchedAt: "2026-01-30T21:00:00+02:00" },
+    ])("rejects invalid, timezone-less, or non-Rome input %#", async (input) => {
       // @ts-expect-error — force init for test
       trakt.isInitialized = true;
       const syncWatchedMovies = vi.fn();

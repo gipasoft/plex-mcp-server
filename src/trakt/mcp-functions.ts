@@ -29,6 +29,35 @@ interface PendingDeviceAuth {
   intervalMs: number;
 }
 
+const ROME_TIME_ZONE = 'Europe/Rome';
+const romeOffsetFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: ROME_TIME_ZONE,
+  timeZoneName: 'longOffset',
+});
+
+function explicitOffsetMinutes(value: string): number | null {
+  if (/Z$/i.test(value)) return 0;
+  const match = value.match(/([+-])(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const minutes = Number(match[2]) * 60 + Number(match[3]);
+  return match[1] === '-' ? -minutes : minutes;
+}
+
+function romeOffsetMinutes(date: Date): number | null {
+  const value = romeOffsetFormatter.formatToParts(date)
+    .find((part) => part.type === 'timeZoneName')?.value;
+  const match = value?.match(/^GMT([+-])(\d{1,2})(?::(\d{2}))?$/);
+  if (!match) return null;
+  const minutes = Number(match[2]) * 60 + Number(match[3] ?? 0);
+  return match[1] === '-' ? -minutes : minutes;
+}
+
+function formatOffset(minutes: number): string {
+  const sign = minutes < 0 ? '-' : '+';
+  const absolute = Math.abs(minutes);
+  return `${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`;
+}
+
 export class TraktMCPFunctions {
   private traktClient!: TraktClient;
   private syncEngine!: TraktSyncEngine;
@@ -294,13 +323,29 @@ export class TraktMCPFunctions {
       };
     }
 
+    const watchedAtDate = new Date(input.watchedAt);
+    const suppliedOffset = explicitOffsetMinutes(input.watchedAt);
+    const expectedOffset = romeOffsetMinutes(watchedAtDate);
+    if (
+      suppliedOffset === null ||
+      expectedOffset === null ||
+      suppliedOffset !== expectedOffset
+    ) {
+      return {
+        success: false,
+        error: expectedOffset === null
+          ? 'Unable to determine the Europe/Rome offset for watchedAt'
+          : `watchedAt must use the Europe/Rome offset ${formatOffset(expectedOffset)} for that date`
+      };
+    }
+
     if (!this.isInitialized) {
       this.initializeTraktClient();
     }
 
     try {
       const movie = await this.traktClient.getMovie(input.traktId);
-      const watchedAt = new Date(input.watchedAt).toISOString();
+      const watchedAt = watchedAtDate.toISOString();
       const result = await this.traktClient.syncWatchedMovies([{
         watched_at: watchedAt,
         ids: { trakt: movie.ids.trakt },
