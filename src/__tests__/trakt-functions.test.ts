@@ -111,6 +111,37 @@ describe("TraktMCPFunctions", () => {
       });
     });
 
+    it("accepts the real Trakt sync response when existing is omitted", async () => {
+      const syncWatchedMovies = vi.fn().mockResolvedValue({
+        added: { movies: 1, shows: 0, seasons: 0, episodes: 0 },
+        not_found: { movies: [], shows: [], seasons: [], episodes: [] },
+      });
+      // @ts-expect-error — force init for test
+      trakt.isInitialized = true;
+      // @ts-expect-error — mock traktClient
+      trakt.traktClient = {
+        getMovie: vi.fn().mockResolvedValue({
+          title: "Close Encounters of the Third Kind",
+          year: 1977,
+          ids: { trakt: 683 },
+        }),
+        syncWatchedMovies,
+      };
+
+      const result = await trakt.traktAddMovieToHistory({
+        traktId: 683,
+        title: "Incontri Ravvicinati del terzo tipo",
+        watchedAt: "2026-08-30T21:00:00+02:00",
+      });
+
+      expect(result).toMatchObject({
+        success: true,
+        added: 1,
+        existing: 0,
+        notFound: [],
+      });
+    });
+
     it.each([
       { traktId: 0, title: "Film", watchedAt: "2026-08-30T21:00:00+02:00" },
       { traktId: 114, title: "", watchedAt: "2026-08-30T21:00:00+02:00" },

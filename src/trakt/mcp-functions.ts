@@ -352,10 +352,14 @@ export class TraktMCPFunctions {
         title: movie.title,
         year: movie.year,
       }]);
-      const notFound = result.not_found.movies.length > 0;
+      const added = result.added?.movies ?? 0;
+      const existing = result.existing?.movies ?? 0;
+      const notFoundMovies = result.not_found?.movies ?? [];
+      const notFound = notFoundMovies.length > 0;
+      const recognized = added > 0 || existing > 0;
 
       return {
-        success: !notFound,
+        success: !notFound && recognized,
         movie: {
           title: movie.title,
           year: movie.year,
@@ -363,12 +367,14 @@ export class TraktMCPFunctions {
         },
         requestedTitle,
         watchedAt,
-        added: result.added.movies,
-        existing: result.existing.movies,
-        notFound: result.not_found.movies,
+        added,
+        existing,
+        notFound: notFoundMovies,
         message: notFound
           ? 'Trakt did not recognize the selected movie'
-          : `Viewing added to Trakt history for ${movie.title}`,
+          : recognized
+            ? `Viewing added to Trakt history for ${movie.title}`
+            : 'Trakt returned no added, existing, or not-found movie result',
       };
     } catch (error) {
       return {
